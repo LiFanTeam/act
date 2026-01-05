@@ -15,22 +15,11 @@ ACT (Action Chunking with Transformers) is an imitation learning algorithm for r
 
 ## Setup & Installation
 
-### Option 1: Conda (Recommended in README)
-The project provides a `conda_env.yaml` for setting up the environment.
-
-```bash
-conda env create -f conda_env.yaml
-conda activate aloha
-cd detr && pip install -e .
-```
-
-### Option 2: UV (Modern Python Tooling)
+### UV (Modern Python Tooling)
 The project also includes `pyproject.toml` and `uv.lock`, allowing for faster setup with `uv`.
 
 ```bash
 uv sync
-source .venv/bin/activate
-cd detr && pip install -e .
 ```
 
 ## Usage
@@ -39,7 +28,7 @@ cd detr && pip install -e .
 Generate scripted demonstration episodes for a task (e.g., `sim_transfer_cube_scripted`).
 
 ```bash
-python record_sim_episodes.py \
+uv run record_sim_episodes.py \
     --task_name sim_transfer_cube_scripted \
     --dataset_dir data/sim_transfer_cube_scripted \
     --num_episodes 50
@@ -50,7 +39,7 @@ python record_sim_episodes.py \
 Visualize a collected episode to verify data quality.
 
 ```bash
-python visualize_episodes.py \
+uv run visualize_episodes.py \
     --dataset_dir data/sim_transfer_cube_scripted \
     --episode_idx 0
 ```
@@ -59,7 +48,7 @@ python visualize_episodes.py \
 Train the ACT policy. Adjust parameters as needed.
 
 ```bash
-python imitate_episodes.py \
+uv run imitate_episodes.py \
     --task_name sim_transfer_cube_scripted \
     --ckpt_dir checkpoint/my_experiment \
     --policy_class ACT \
@@ -77,7 +66,7 @@ python imitate_episodes.py \
 Evaluate a trained policy by adding the `--eval` flag. This typically loads the best checkpoint from `ckpt_dir`.
 
 ```bash
-python imitate_episodes.py \
+uv run imitate_episodes.py \
     --task_name sim_transfer_cube_scripted \
     --ckpt_dir checkpoint/my_experiment \
     --policy_class ACT \
