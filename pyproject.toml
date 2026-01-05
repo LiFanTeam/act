@@ -1,0 +1,36 @@
+[project]
+name = "act"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dm-control==1.0.9",
+    "einops==0.6.0",
+    "h5py==3.8.0",
+    "ipython==8.12.0",
+    "matplotlib==3.7.1",
+    "mujoco==2.3.3",
+    "numpy<2",
+    "opencv-python==4.7.0.72",
+    "packaging==23.0",
+    "pexpect==4.8.0",
+    "pyquaternion==0.9.9",
+    "pyyaml==6.0",
+    "rospkg==1.5.0",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu118", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu118", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]

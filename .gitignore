@@ -7,6 +7,9 @@ data_local
 .vscode
 _wandb
 
+
+checkpoint
+
 **/.DS_Store
 
 fuse.cfg
