@@ -8,6 +8,10 @@ class StackCubeTaskTests(unittest.TestCase):
         from constants import SIM_TASK_CONFIGS
 
         self.assertIn("sim_stack_cube_scripted", SIM_TASK_CONFIGS)
+        self.assertEqual(
+            SIM_TASK_CONFIGS["sim_stack_cube_scripted"]["camera_names"],
+            ["top", "angle"],
+        )
 
     def test_sample_stack_pose_shape(self):
         from utils import sample_stack_pose

@@ -28,7 +28,7 @@ SIM_TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/sim_stack_cube_scripted',
         'num_episodes': 50,
         'episode_len': 500,
-        'camera_names': ['top']
+        'camera_names': ['top', 'angle']
     },
 
     'sim_insertion_human': {
