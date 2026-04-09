@@ -12,6 +12,8 @@ class StackCubeTaskTests(unittest.TestCase):
             SIM_TASK_CONFIGS["sim_stack_cube_scripted"]["camera_names"],
             ["top", "angle"],
         )
+        self.assertEqual(SIM_TASK_CONFIGS["sim_stack_cube_scripted"]["num_episodes"], 100)
+        self.assertEqual(SIM_TASK_CONFIGS["sim_stack_cube_scripted"]["episode_len"], 260)
 
     def test_sample_stack_pose_shape(self):
         from utils import sample_stack_pose
@@ -66,6 +68,30 @@ class StackCubeTaskTests(unittest.TestCase):
         policy = StackCubePolicy(False)
         value = policy._step_gripper(1.0, 0.0, 0.2)
         self.assertAlmostEqual(value, 0.8)
+
+    def test_joint_trajectory_smoothing_limits_per_step_delta(self):
+        from utils import smooth_joint_trajectory
+
+        trajectory = np.array(
+            [
+                np.zeros(14),
+                np.array([0.4] * 6 + [0.3] + [-0.4] * 6 + [-0.3]),
+                np.array([0.9] * 6 + [0.7] + [-0.9] * 6 + [-0.7]),
+            ],
+            dtype=np.float64,
+        )
+
+        smoothed = smooth_joint_trajectory(
+            trajectory,
+            arm_delta_limit=0.08,
+            gripper_delta_limit=0.05,
+        )
+        deltas = np.abs(np.diff(smoothed, axis=0))
+        arm_indices = list(range(6)) + list(range(7, 13))
+        gripper_indices = [6, 13]
+
+        self.assertTrue(np.all(deltas[:, arm_indices] <= 0.080001))
+        self.assertTrue(np.all(deltas[:, gripper_indices] <= 0.050001))
 
     def test_left_lift_failure_retries_instead_of_advancing(self):
         from scripted_policy import StackCubePolicy

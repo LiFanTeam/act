@@ -130,6 +130,32 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
 
 ### env utils
 
+def smooth_joint_trajectory(joint_traj, arm_delta_limit=0.08, gripper_delta_limit=0.05):
+    traj = np.asarray(joint_traj, dtype=np.float32).copy()
+    if traj.ndim != 2 or traj.shape[1] != 14:
+        raise ValueError(f'Expected trajectory with shape (T, 14), got {traj.shape}')
+
+    arm_indices = np.array(list(range(6)) + list(range(7, 13)))
+    gripper_indices = np.array([6, 13])
+
+    for t in range(1, len(traj)):
+        prev = traj[t - 1]
+        curr = traj[t]
+        arm_delta = np.clip(
+            curr[arm_indices] - prev[arm_indices],
+            -arm_delta_limit,
+            arm_delta_limit,
+        )
+        gripper_delta = np.clip(
+            curr[gripper_indices] - prev[gripper_indices],
+            -gripper_delta_limit,
+            gripper_delta_limit,
+        )
+        traj[t, arm_indices] = prev[arm_indices] + arm_delta
+        traj[t, gripper_indices] = prev[gripper_indices] + gripper_delta
+
+    return traj
+
 def sample_box_pose():
     x_range = [0.0, 0.2]
     y_range = [0.4, 0.6]
