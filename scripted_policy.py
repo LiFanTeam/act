@@ -149,6 +149,251 @@ class InsertionPolicy(BasePolicy):
         ]
 
 
+class StackCubePolicy:
+    def __init__(self, inject_noise=False):
+        self.inject_noise = inject_noise
+        self.step_count = 0
+        self.left_phase = 'approach_red'
+        self.right_phase = 'wait'
+        self.left_phase_steps = 0
+        self.right_phase_steps = 0
+        self.stack_center = np.array([0.0, 0.5, 0.05])
+        self.left_init_pose = None
+        self.right_init_pose = None
+        self.left_pick_quat = None
+        self.right_pick_quat = None
+        self.left_support_quat = None
+        self.current_left_gripper = None
+        self.current_right_gripper = None
+        self.gripper_delta = 0.08
+
+    @staticmethod
+    def _step_towards(curr_xyz, target_xyz, max_delta):
+        delta = target_xyz - curr_xyz
+        distance = np.linalg.norm(delta)
+        if distance <= max_delta or distance == 0:
+            return target_xyz.copy()
+        return curr_xyz + delta / distance * max_delta
+
+    @staticmethod
+    def _step_gripper(curr, target, max_delta):
+        delta = np.clip(target - curr, -max_delta, max_delta)
+        return float(np.clip(curr + delta, 0.0, 1.0))
+
+    @staticmethod
+    def _is_close(curr_xyz, target_xyz, threshold):
+        return np.linalg.norm(curr_xyz - target_xyz) < threshold
+
+    def _transition_left(self, new_phase):
+        self.left_phase = new_phase
+        self.left_phase_steps = 0
+
+    def _transition_right(self, new_phase):
+        self.right_phase = new_phase
+        self.right_phase_steps = 0
+
+    def _compute_left_target(self, obs, red_pose):
+        curr_pose = obs['mocap_pose_left']
+        curr_xyz = curr_pose[:3]
+        red_xyz = red_pose[:3]
+        normal_step = 0.018
+        slow_step = 0.006
+
+        if self.left_phase == 'approach_red':
+            target_xyz = red_xyz + np.array([0.0, 0.0, 0.08])
+            target_quat = self.left_pick_quat
+            gripper = 1.0
+            step_size = normal_step
+            if self._is_close(curr_xyz, target_xyz, 0.02):
+                self._transition_left('grasp_red')
+        elif self.left_phase == 'grasp_red':
+            target_xyz = red_xyz + np.array([0.0, 0.0, -0.015])
+            target_quat = self.left_pick_quat
+            gripper = 1.0
+            step_size = slow_step
+            if self._is_close(curr_xyz, target_xyz, 0.01):
+                self._transition_left('close_red')
+        elif self.left_phase == 'close_red':
+            target_xyz = red_xyz + np.array([0.0, 0.0, -0.015])
+            target_quat = self.left_pick_quat
+            gripper = 0.0
+            step_size = slow_step
+            if self.left_phase_steps >= 15:
+                self._transition_left('lift_red')
+        elif self.left_phase == 'lift_red':
+            target_xyz = red_xyz + np.array([0.0, 0.0, 0.10])
+            target_quat = self.left_pick_quat
+            gripper = 0.0
+            step_size = normal_step
+            if red_xyz[2] > 0.09:
+                self._transition_left('move_red_center')
+            elif self.left_phase_steps >= 40 and red_xyz[2] < 0.045:
+                self._transition_left('approach_red')
+        elif self.left_phase == 'move_red_center':
+            target_xyz = np.array([-0.02, self.stack_center[1], 0.12])
+            target_quat = self.left_pick_quat
+            gripper = 0.0
+            step_size = normal_step
+            if self._is_close(curr_xyz, target_xyz, 0.025):
+                self._transition_left('place_red')
+        elif self.left_phase == 'place_red':
+            target_xyz = np.array([-0.01, self.stack_center[1], 0.04])
+            target_quat = self.left_pick_quat
+            gripper = 0.0
+            step_size = slow_step
+            centered = np.linalg.norm(red_xyz[:2] - self.stack_center[:2]) < 0.035
+            if centered and red_xyz[2] < 0.065 and self.left_phase_steps >= 20:
+                self._transition_left('release_red')
+        elif self.left_phase == 'release_red':
+            target_xyz = np.array([-0.02, self.stack_center[1], 0.14])
+            target_quat = self.left_pick_quat
+            gripper = 1.0
+            step_size = slow_step
+            if self.left_phase_steps >= 15:
+                self._transition_left('support_red')
+        else:
+            target_xyz = np.array([-0.20, self.stack_center[1], 0.22])
+            target_quat = self.left_pick_quat
+            gripper = 1.0
+            step_size = normal_step
+
+        next_xyz = self._step_towards(curr_xyz, target_xyz, step_size)
+        self.left_phase_steps += 1
+        return next_xyz, target_quat, gripper
+
+    def _compute_right_target(self, obs, red_pose, blue_pose):
+        curr_pose = obs['mocap_pose_right']
+        curr_xyz = curr_pose[:3]
+        red_xyz = red_pose[:3]
+        blue_xyz = blue_pose[:3]
+        normal_step = 0.018
+        slow_step = 0.004
+
+        if self.right_phase == 'wait':
+            target_xyz = self.right_init_pose[:3]
+            target_quat = self.right_pick_quat
+            gripper = 1.0
+            step_size = normal_step
+            if self.left_phase == 'support_red' and self.left_phase_steps >= 10:
+                self._transition_right('approach_blue')
+        elif self.right_phase == 'approach_blue':
+            target_xyz = blue_xyz + np.array([0.0, 0.0, 0.08])
+            target_quat = self.right_pick_quat
+            gripper = 1.0
+            step_size = normal_step
+            if self._is_close(curr_xyz, target_xyz, 0.02):
+                self._transition_right('grasp_blue')
+        elif self.right_phase == 'grasp_blue':
+            target_xyz = blue_xyz + np.array([0.0, 0.0, -0.015])
+            target_quat = self.right_pick_quat
+            gripper = 1.0
+            step_size = slow_step
+            if self._is_close(curr_xyz, target_xyz, 0.01):
+                self._transition_right('close_blue')
+        elif self.right_phase == 'close_blue':
+            target_xyz = blue_xyz + np.array([0.0, 0.0, -0.015])
+            target_quat = self.right_pick_quat
+            gripper = 0.0
+            step_size = slow_step
+            if self.right_phase_steps >= 15:
+                self._transition_right('lift_blue')
+        elif self.right_phase == 'lift_blue':
+            target_xyz = blue_xyz + np.array([0.0, 0.0, 0.12])
+            target_quat = self.right_pick_quat
+            gripper = 0.0
+            step_size = normal_step
+            if blue_xyz[2] > 0.09:
+                self._transition_right('align_stack')
+            elif self.right_phase_steps >= 40 and blue_xyz[2] < 0.045:
+                self._transition_right('approach_blue')
+        elif self.right_phase == 'align_stack':
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.12])
+            target_quat = self.right_pick_quat
+            gripper = 0.0
+            step_size = normal_step
+            xy_close = np.linalg.norm(curr_xyz[:2] - target_xyz[:2]) < 0.015
+            z_close = abs(curr_xyz[2] - target_xyz[2]) < 0.02
+            if xy_close and z_close:
+                self._transition_right('descend_stack')
+        elif self.right_phase == 'descend_stack':
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.075])
+            target_quat = self.right_pick_quat
+            gripper = 0.0
+            step_size = slow_step
+            if self._is_close(curr_xyz, target_xyz, 0.008):
+                self._transition_right('release_blue')
+        elif self.right_phase == 'release_blue':
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.078])
+            target_quat = self.right_pick_quat
+            gripper = 1.0
+            step_size = slow_step
+            if self.right_phase_steps >= 25:
+                self._transition_right('retreat')
+        else:
+            target_xyz = np.array([0.18, 0.46, 0.20])
+            target_quat = self.right_pick_quat
+            gripper = 1.0
+            step_size = normal_step
+
+        next_xyz = self._step_towards(curr_xyz, target_xyz, step_size)
+        self.right_phase_steps += 1
+        return next_xyz, target_quat, gripper
+
+    def __call__(self, ts):
+        obs = ts.observation
+        red_pose = np.array(obs['env_state'][:7])
+        blue_pose = np.array(obs['env_state'][7:])
+
+        if self.step_count == 0:
+            self.left_init_pose = obs['mocap_pose_left'].copy()
+            self.right_init_pose = obs['mocap_pose_right'].copy()
+            self.left_pick_quat = (
+                Quaternion(self.left_init_pose[3:])
+                * Quaternion(axis=[0.0, 1.0, 0.0], degrees=60)
+            ).elements
+            self.right_pick_quat = (
+                Quaternion(self.right_init_pose[3:])
+                * Quaternion(axis=[0.0, 1.0, 0.0], degrees=-60)
+            ).elements
+            self.left_support_quat = Quaternion(
+                axis=[1.0, 0.0, 0.0],
+                degrees=90,
+            ).elements
+            self.current_left_gripper = float(obs['qpos'][6])
+            self.current_right_gripper = float(obs['qpos'][13])
+
+        left_xyz, left_quat, left_gripper = self._compute_left_target(obs, red_pose)
+        right_xyz, right_quat, right_gripper = self._compute_right_target(
+            obs,
+            red_pose,
+            blue_pose,
+        )
+
+        self.current_left_gripper = self._step_gripper(
+            self.current_left_gripper,
+            left_gripper,
+            self.gripper_delta,
+        )
+        self.current_right_gripper = self._step_gripper(
+            self.current_right_gripper,
+            right_gripper,
+            self.gripper_delta,
+        )
+
+        if self.inject_noise:
+            scale = 0.002
+            left_xyz = left_xyz + np.random.uniform(-scale, scale, left_xyz.shape)
+            right_xyz = right_xyz + np.random.uniform(-scale, scale, right_xyz.shape)
+
+        self.step_count += 1
+        return np.concatenate(
+            [
+                np.concatenate([left_xyz, left_quat, [self.current_left_gripper]]),
+                np.concatenate([right_xyz, right_quat, [self.current_right_gripper]]),
+            ]
+        )
+
+
 def test_policy(task_name):
     # example rolling out pick_and_transfer policy
     onscreen_render = True
@@ -158,8 +403,13 @@ def test_policy(task_name):
     episode_len = SIM_TASK_CONFIGS[task_name]['episode_len']
     if 'sim_transfer_cube' in task_name:
         env = make_ee_sim_env('sim_transfer_cube')
+        policy_cls = PickAndTransferPolicy
+    elif 'sim_stack_cube' in task_name:
+        env = make_ee_sim_env('sim_stack_cube_scripted')
+        policy_cls = StackCubePolicy
     elif 'sim_insertion' in task_name:
         env = make_ee_sim_env('sim_insertion')
+        policy_cls = InsertionPolicy
     else:
         raise NotImplementedError
 
@@ -171,7 +421,7 @@ def test_policy(task_name):
             plt_img = ax.imshow(ts.observation['images']['angle'])
             plt.ion()
 
-        policy = PickAndTransferPolicy(inject_noise)
+        policy = policy_cls(inject_noise)
         for step in range(episode_len):
             action = policy(ts)
             ts = env.step(action)
@@ -191,4 +441,3 @@ def test_policy(task_name):
 if __name__ == '__main__':
     test_task_name = 'sim_transfer_cube_scripted'
     test_policy(test_task_name)
-

@@ -11,11 +11,16 @@ from constants import PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN
 from constants import MASTER_GRIPPER_POSITION_NORMALIZE_FN
 from constants import PUPPET_GRIPPER_POSITION_NORMALIZE_FN
 from constants import PUPPET_GRIPPER_VELOCITY_NORMALIZE_FN
+from utils import sample_stack_pose
 
 import IPython
 e = IPython.embed
 
 BOX_POSE = [None] # to be changed from outside
+CUBE_SIZE = 0.02
+STACK_XY_THRESHOLD = 0.025
+STACK_HEIGHT_THRESHOLD = 0.03
+STACK_CENTER = np.array([0.0, 0.5])
 
 def make_sim_env(task_name):
     """
@@ -40,6 +45,12 @@ def make_sim_env(task_name):
         physics = mujoco.Physics.from_xml_path(xml_path)
         task = TransferCubeTask(random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
+                                  n_sub_steps=None, flat_observation=False)
+    elif 'sim_stack_cube' in task_name:
+        xml_path = os.path.join(XML_DIR, 'bimanual_viperx_stack_cube.xml')
+        physics = mujoco.Physics.from_xml_path(xml_path)
+        task = StackCubeTask(random=False)
+        env = control.Environment(physics, task, time_limit=25, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
     elif 'sim_insertion' in task_name:
         xml_path = os.path.join(XML_DIR, f'bimanual_viperx_insertion.xml')
@@ -116,6 +127,21 @@ class BimanualViperXTask(base.Task):
     def get_reward(self, physics):
         # return whether left gripper is holding the box
         raise NotImplementedError
+
+    @staticmethod
+    def get_contact_pairs(physics):
+        contact_pairs = []
+        for i_contact in range(physics.data.ncon):
+            id_geom_1 = physics.data.contact[i_contact].geom1
+            id_geom_2 = physics.data.contact[i_contact].geom2
+            name_geom_1 = physics.model.id2name(id_geom_1, 'geom')
+            name_geom_2 = physics.model.id2name(id_geom_2, 'geom')
+            contact_pairs.append((name_geom_1, name_geom_2))
+        return contact_pairs
+
+    @staticmethod
+    def has_contact(contact_pairs, geom_a, geom_b):
+        return (geom_a, geom_b) in contact_pairs or (geom_b, geom_a) in contact_pairs
 
 
 class TransferCubeTask(BimanualViperXTask):
@@ -229,6 +255,61 @@ class InsertionTask(BimanualViperXTask):
         return reward
 
 
+class StackCubeTask(BimanualViperXTask):
+    def __init__(self, random=None):
+        super().__init__(random=random)
+        self.max_reward = 4
+
+    def initialize_episode(self, physics):
+        with physics.reset_context():
+            physics.named.data.qpos[:16] = START_ARM_POSE
+            np.copyto(physics.data.ctrl, START_ARM_POSE)
+            if BOX_POSE[0] is None:
+                BOX_POSE[0] = sample_stack_pose()
+            physics.named.data.qpos[-14:] = BOX_POSE[0]
+        super().initialize_episode(physics)
+
+    @staticmethod
+    def get_env_state(physics):
+        return physics.data.qpos.copy()[16:]
+
+    def get_reward(self, physics):
+        contact_pairs = self.get_contact_pairs(physics)
+        env_state = self.get_env_state(physics)
+        red_xyz = env_state[:3]
+        blue_xyz = env_state[7:10]
+
+        left_touch_red = any(
+            self.has_contact(contact_pairs, 'red_box', finger)
+            for finger in (
+                'vx300s_left/10_left_gripper_finger',
+                'vx300s_left/10_right_gripper_finger',
+            )
+        )
+        right_touch_blue = any(
+            self.has_contact(contact_pairs, 'blue_box', finger)
+            for finger in (
+                'vx300s_right/10_left_gripper_finger',
+                'vx300s_right/10_right_gripper_finger',
+            )
+        )
+        blue_touch_table = self.has_contact(contact_pairs, 'blue_box', 'table')
+        red_centered = np.linalg.norm(red_xyz[:2] - STACK_CENTER) < 0.04
+        blue_aligned = np.linalg.norm(blue_xyz[:2] - red_xyz[:2]) < STACK_XY_THRESHOLD
+        blue_stacked = blue_xyz[2] > red_xyz[2] + STACK_HEIGHT_THRESHOLD
+
+        reward = 0
+        if left_touch_red:
+            reward = 1
+        if left_touch_red and red_centered:
+            reward = 2
+        if right_touch_blue:
+            reward = 3
+        if blue_stacked and blue_aligned and (not right_touch_blue) and (not blue_touch_table):
+            reward = 4
+        return reward
+
+
 def get_action(master_bot_left, master_bot_right):
     action = np.zeros(14)
     # arm action
@@ -275,4 +356,3 @@ def test_sim_teleop():
 
 if __name__ == '__main__':
     test_sim_teleop()
-

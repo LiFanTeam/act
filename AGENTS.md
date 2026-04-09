@@ -28,7 +28,6 @@ This repository contains code for training and evaluating Action Chunking with T
 - Functions/variables use `snake_case`, classes `CamelCase`, constants `UPPER_SNAKE_CASE` (see `constants.py`).
 - Keep tensor device/dtype handling explicit; mirror image normalization patterns from `policy.py` when adding new inputs.
 - Document non-obvious tensor shapes, seeding, and environment flags; update both `pyproject.toml`/`uv.lock` and `conda_env.yaml` when adding dependencies.
-- Use augment context engine mcp to fetch code snippets for better codespace understanding.
 
 ## Testing Guidelines
 - No formal unit test suite; validate changes by running a short `record_sim_episodes.py` + `visualize_episodes.py` cycle and a small `imitate_episodes.py --num_epochs 1 --batch_size 2` smoke.

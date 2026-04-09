@@ -8,7 +8,7 @@ from constants import PUPPET_GRIPPER_POSITION_UNNORMALIZE_FN
 from constants import PUPPET_GRIPPER_POSITION_NORMALIZE_FN
 from constants import PUPPET_GRIPPER_VELOCITY_NORMALIZE_FN
 
-from utils import sample_box_pose, sample_insertion_pose
+from utils import sample_box_pose, sample_insertion_pose, sample_stack_pose
 from dm_control import mujoco
 from dm_control.rl import control
 from dm_control.suite import base
@@ -40,6 +40,12 @@ def make_ee_sim_env(task_name):
         physics = mujoco.Physics.from_xml_path(xml_path)
         task = TransferCubeEETask(random=False)
         env = control.Environment(physics, task, time_limit=20, control_timestep=DT,
+                                  n_sub_steps=None, flat_observation=False)
+    elif 'sim_stack_cube' in task_name:
+        xml_path = os.path.join(XML_DIR, 'bimanual_viperx_ee_stack_cube.xml')
+        physics = mujoco.Physics.from_xml_path(xml_path)
+        task = StackCubeEETask(random=False)
+        env = control.Environment(physics, task, time_limit=25, control_timestep=DT,
                                   n_sub_steps=None, flat_observation=False)
     elif 'sim_insertion' in task_name:
         xml_path = os.path.join(XML_DIR, f'bimanual_viperx_ee_insertion.xml')
@@ -148,6 +154,21 @@ class BimanualViperXEETask(base.Task):
 
     def get_reward(self, physics):
         raise NotImplementedError
+
+    @staticmethod
+    def get_contact_pairs(physics):
+        contact_pairs = []
+        for i_contact in range(physics.data.ncon):
+            id_geom_1 = physics.data.contact[i_contact].geom1
+            id_geom_2 = physics.data.contact[i_contact].geom2
+            name_geom_1 = physics.model.id2name(id_geom_1, 'geom')
+            name_geom_2 = physics.model.id2name(id_geom_2, 'geom')
+            contact_pairs.append((name_geom_1, name_geom_2))
+        return contact_pairs
+
+    @staticmethod
+    def has_contact(contact_pairs, geom_a, geom_b):
+        return (geom_a, geom_b) in contact_pairs or (geom_b, geom_a) in contact_pairs
 
 
 class TransferCubeEETask(BimanualViperXEETask):
@@ -263,5 +284,65 @@ class InsertionEETask(BimanualViperXEETask):
         if peg_touch_socket and (not peg_touch_table) and (not socket_touch_table): # peg and socket touching
             reward = 3
         if pin_touched: # successful insertion
+            reward = 4
+        return reward
+
+
+class StackCubeEETask(BimanualViperXEETask):
+    def __init__(self, random=None):
+        super().__init__(random=random)
+        self.max_reward = 4
+
+    def initialize_episode(self, physics):
+        self.initialize_robots(physics)
+        stack_pose = sample_stack_pose()
+
+        red_joint_id = physics.model.name2id('red_box_joint', 'joint')
+        red_qpos_idx = physics.model.jnt_qposadr[red_joint_id]
+        np.copyto(physics.data.qpos[red_qpos_idx:red_qpos_idx + 7], stack_pose[:7])
+
+        blue_joint_id = physics.model.name2id('blue_box_joint', 'joint')
+        blue_qpos_idx = physics.model.jnt_qposadr[blue_joint_id]
+        np.copyto(physics.data.qpos[blue_qpos_idx:blue_qpos_idx + 7], stack_pose[7:])
+
+        super().initialize_episode(physics)
+
+    @staticmethod
+    def get_env_state(physics):
+        return physics.data.qpos.copy()[16:]
+
+    def get_reward(self, physics):
+        contact_pairs = self.get_contact_pairs(physics)
+        env_state = self.get_env_state(physics)
+        red_xyz = env_state[:3]
+        blue_xyz = env_state[7:10]
+
+        left_touch_red = any(
+            self.has_contact(contact_pairs, 'red_box', finger)
+            for finger in (
+                'vx300s_left/10_left_gripper_finger',
+                'vx300s_left/10_right_gripper_finger',
+            )
+        )
+        right_touch_blue = any(
+            self.has_contact(contact_pairs, 'blue_box', finger)
+            for finger in (
+                'vx300s_right/10_left_gripper_finger',
+                'vx300s_right/10_right_gripper_finger',
+            )
+        )
+        blue_touch_table = self.has_contact(contact_pairs, 'blue_box', 'table')
+        red_centered = np.linalg.norm(red_xyz[:2] - np.array([0.0, 0.5])) < 0.04
+        blue_aligned = np.linalg.norm(blue_xyz[:2] - red_xyz[:2]) < 0.025
+        blue_stacked = blue_xyz[2] > red_xyz[2] + 0.03
+
+        reward = 0
+        if left_touch_red:
+            reward = 1
+        if left_touch_red and red_centered:
+            reward = 2
+        if right_touch_blue:
+            reward = 3
+        if blue_stacked and blue_aligned and (not right_touch_blue) and (not blue_touch_table):
             reward = 4
         return reward

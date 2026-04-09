@@ -11,7 +11,7 @@ from einops import rearrange
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
-from utils import sample_box_pose, sample_insertion_pose # robot functions
+from utils import sample_box_pose, sample_insertion_pose, sample_stack_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
@@ -203,6 +203,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
         ### set task
         if 'sim_transfer_cube' in task_name:
             BOX_POSE[0] = sample_box_pose() # used in sim reset
+        elif 'sim_stack_cube' in task_name:
+            BOX_POSE[0] = sample_stack_pose() # used in sim reset
         elif 'sim_insertion' in task_name:
             BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
 

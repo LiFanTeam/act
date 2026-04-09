@@ -166,6 +166,26 @@ def sample_insertion_pose():
 
     return peg_pose, socket_pose
 
+
+def sample_stack_pose():
+    red_x_range = [-0.205, -0.165]
+    red_y_range = [0.49, 0.51]
+    red_z_range = [0.05, 0.05]
+    red_ranges = np.vstack([red_x_range, red_y_range, red_z_range])
+    red_position = np.random.uniform(red_ranges[:, 0], red_ranges[:, 1])
+    red_quat = np.array([1, 0, 0, 0])
+    red_pose = np.concatenate([red_position, red_quat])
+
+    blue_x_range = [0.165, 0.205]
+    blue_y_range = [0.49, 0.51]
+    blue_z_range = [0.05, 0.05]
+    blue_ranges = np.vstack([blue_x_range, blue_y_range, blue_z_range])
+    blue_position = np.random.uniform(blue_ranges[:, 0], blue_ranges[:, 1])
+    blue_quat = np.array([1, 0, 0, 0])
+    blue_pose = np.concatenate([blue_position, blue_quat])
+
+    return np.concatenate([red_pose, blue_pose])
+
 ### helper functions
 
 def compute_dict_mean(epoch_dicts):
