@@ -93,6 +93,66 @@ class StackCubeTaskTests(unittest.TestCase):
         self.assertTrue(np.all(deltas[:, arm_indices] <= 0.080001))
         self.assertTrue(np.all(deltas[:, gripper_indices] <= 0.050001))
 
+    def test_release_red_holds_pose_while_opening(self):
+        from scripted_policy import StackCubePolicy
+
+        policy = StackCubePolicy(False)
+        policy.left_phase = "release_red"
+        policy.left_phase_steps = 0
+        policy.left_pick_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        policy.current_left_gripper = 0.0
+
+        obs = {"mocap_pose_left": np.array([-0.01, 0.5, 0.041, 1.0, 0.0, 0.0, 0.0])}
+        red_pose = np.array([-0.006, 0.5004, 0.044, 1.0, 0.0, 0.0, 0.0])
+
+        next_xyz, _, gripper = policy._compute_left_target(obs, red_pose)
+
+        self.assertLess(next_xyz[2], 0.045)
+        self.assertEqual(policy.left_phase, "release_red")
+        self.assertEqual(gripper, 1.0)
+
+    def test_right_wait_requires_red_stability(self):
+        from scripted_policy import StackCubePolicy
+
+        policy = StackCubePolicy(False)
+        policy.right_phase = "wait"
+        policy.right_phase_steps = 0
+        policy.left_phase = "support_red"
+        policy.left_phase_steps = 20
+        policy.red_stable_steps = 0
+        policy.right_init_pose = np.array([0.18, 0.46, 0.20, 1.0, 0.0, 0.0, 0.0])
+        policy.right_pick_quat = np.array([1.0, 0.0, 0.0, 0.0])
+
+        obs = {"mocap_pose_right": np.array([0.18, 0.46, 0.20, 1.0, 0.0, 0.0, 0.0])}
+        red_pose = np.array([0.01, 0.5, 0.02, 1.0, 0.0, 0.0, 0.0])
+        blue_pose = np.array([0.18, 0.5, 0.02, 1.0, 0.0, 0.0, 0.0])
+
+        policy._compute_right_target(obs, red_pose, blue_pose)
+        self.assertEqual(policy.right_phase, "wait")
+
+        policy.red_stable_steps = 12
+        policy._compute_right_target(obs, red_pose, blue_pose)
+        self.assertEqual(policy.right_phase, "approach_blue")
+
+    def test_release_blue_holds_conservative_hover_while_opening(self):
+        from scripted_policy import StackCubePolicy
+
+        policy = StackCubePolicy(False)
+        policy.right_phase = "release_blue"
+        policy.right_phase_steps = 0
+        policy.right_pick_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        policy.current_right_gripper = 0.0
+
+        obs = {"mocap_pose_right": np.array([0.01, 0.5, 0.114, 1.0, 0.0, 0.0, 0.0])}
+        red_pose = np.array([0.01, 0.5, 0.02, 1.0, 0.0, 0.0, 0.0])
+        blue_pose = np.array([0.008, 0.5, 0.101, 1.0, 0.0, 0.0, 0.0])
+
+        next_xyz, _, gripper = policy._compute_right_target(obs, red_pose, blue_pose)
+
+        self.assertGreaterEqual(next_xyz[2], 0.114 - 1e-6)
+        self.assertEqual(policy.right_phase, "release_blue")
+        self.assertEqual(gripper, 1.0)
+
     def test_left_lift_failure_retries_instead_of_advancing(self):
         from scripted_policy import StackCubePolicy
 

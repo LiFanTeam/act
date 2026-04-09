@@ -166,6 +166,8 @@ class StackCubePolicy:
         self.current_left_gripper = None
         self.current_right_gripper = None
         self.gripper_delta = 0.08
+        self.prev_red_xyz = None
+        self.red_stable_steps = 0
 
     @staticmethod
     def _step_towards(curr_xyz, target_xyz, max_delta):
@@ -198,6 +200,7 @@ class StackCubePolicy:
         red_xyz = red_pose[:3]
         normal_step = 0.018
         slow_step = 0.006
+        settle_step = 0.004
 
         if self.left_phase == 'approach_red':
             target_xyz = red_xyz + np.array([0.0, 0.0, 0.08])
@@ -245,11 +248,22 @@ class StackCubePolicy:
             if centered and red_xyz[2] < 0.065 and self.left_phase_steps >= 20:
                 self._transition_left('release_red')
         elif self.left_phase == 'release_red':
-            target_xyz = np.array([-0.02, self.stack_center[1], 0.14])
+            # Open in place first to avoid dragging the cube while contact is breaking.
+            target_xyz = curr_xyz.copy()
+            target_xyz[2] = min(curr_xyz[2], red_xyz[2] + 0.002)
             target_quat = self.left_pick_quat
             gripper = 1.0
-            step_size = slow_step
-            if self.left_phase_steps >= 15:
+            step_size = 0.001
+            if self.left_phase_steps >= 12 and self.current_left_gripper is not None and self.current_left_gripper >= 0.95:
+                self._transition_left('stabilize_red')
+        elif self.left_phase == 'stabilize_red':
+            # Lift almost vertically and wait for the red cube pose to settle before moving away.
+            target_xyz = np.array([curr_xyz[0], curr_xyz[1], red_xyz[2] + 0.09])
+            target_quat = self.left_pick_quat
+            gripper = 1.0
+            step_size = settle_step
+            settled_height = curr_xyz[2] >= red_xyz[2] + 0.055
+            if settled_height and self.red_stable_steps >= 8:
                 self._transition_left('support_red')
         else:
             target_xyz = np.array([-0.20, self.stack_center[1], 0.22])
@@ -274,7 +288,7 @@ class StackCubePolicy:
             target_quat = self.right_pick_quat
             gripper = 1.0
             step_size = normal_step
-            if self.left_phase == 'support_red' and self.left_phase_steps >= 10:
+            if self.left_phase == 'support_red' and self.left_phase_steps >= 10 and self.red_stable_steps >= 12:
                 self._transition_right('approach_blue')
         elif self.right_phase == 'approach_blue':
             target_xyz = blue_xyz + np.array([0.0, 0.0, 0.08])
@@ -311,23 +325,38 @@ class StackCubePolicy:
             target_quat = self.right_pick_quat
             gripper = 0.0
             step_size = normal_step
-            xy_close = np.linalg.norm(curr_xyz[:2] - target_xyz[:2]) < 0.015
+            xy_close = np.linalg.norm(curr_xyz[:2] - target_xyz[:2]) < 0.012
             z_close = abs(curr_xyz[2] - target_xyz[2]) < 0.02
             if xy_close and z_close:
-                self._transition_right('descend_stack')
-        elif self.right_phase == 'descend_stack':
-            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.075])
+                self._transition_right('fine_align_stack')
+        elif self.right_phase == 'fine_align_stack':
+            # Tighten xy alignment at a low hover height before final descent.
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.095])
             target_quat = self.right_pick_quat
             gripper = 0.0
-            step_size = slow_step
-            if self._is_close(curr_xyz, target_xyz, 0.008):
+            step_size = 0.003
+            xy_close = np.linalg.norm(curr_xyz[:2] - target_xyz[:2]) < 0.004
+            z_close = abs(curr_xyz[2] - target_xyz[2]) < 0.006
+            if xy_close and z_close and self.red_stable_steps >= 4:
+                self._transition_right('descend_stack')
+        elif self.right_phase == 'descend_stack':
+            # Keep a conservative hover so the cube stays constrained while aligning.
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.094])
+            target_quat = self.right_pick_quat
+            gripper = 0.0
+            step_size = 0.003
+            xy_close = np.linalg.norm(curr_xyz[:2] - target_xyz[:2]) < 0.003
+            z_close = abs(curr_xyz[2] - target_xyz[2]) < 0.004
+            if xy_close and z_close:
                 self._transition_right('release_blue')
         elif self.right_phase == 'release_blue':
-            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.078])
+            # Open at the same hover height instead of continuing to sink while releasing.
+            target_xyz = np.array([red_xyz[0], red_xyz[1], red_xyz[2] + 0.094])
             target_quat = self.right_pick_quat
             gripper = 1.0
-            step_size = slow_step
-            if self.right_phase_steps >= 25:
+            # Hold alignment while opening instead of drifting during release.
+            step_size = 0.002
+            if self.right_phase_steps >= 12 and self.current_right_gripper is not None and self.current_right_gripper >= 0.95:
                 self._transition_right('retreat')
         else:
             target_xyz = np.array([0.18, 0.46, 0.20])
@@ -343,6 +372,7 @@ class StackCubePolicy:
         obs = ts.observation
         red_pose = np.array(obs['env_state'][:7])
         blue_pose = np.array(obs['env_state'][7:])
+        red_xyz = red_pose[:3]
 
         if self.step_count == 0:
             self.left_init_pose = obs['mocap_pose_left'].copy()
@@ -361,6 +391,15 @@ class StackCubePolicy:
             ).elements
             self.current_left_gripper = float(obs['qpos'][6])
             self.current_right_gripper = float(obs['qpos'][13])
+            self.prev_red_xyz = red_xyz.copy()
+            self.red_stable_steps = 0
+        else:
+            red_motion = np.linalg.norm(red_xyz - self.prev_red_xyz)
+            if red_motion < 0.0015 and red_xyz[2] < 0.07:
+                self.red_stable_steps += 1
+            else:
+                self.red_stable_steps = 0
+            self.prev_red_xyz = red_xyz.copy()
 
         left_xyz, left_quat, left_gripper = self._compute_left_target(obs, red_pose)
         right_xyz, right_quat, right_gripper = self._compute_right_target(
